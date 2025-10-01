@@ -1,0 +1,15 @@
+{
+  "questoes": [
+    {
+      "enunciado_txt": "html do enunciado vai aqui.",
+      "alternativas": {
+        "alterantiva_a_txt": "html da a",
+        "alterantiva_b_txt": "html da b",
+        "alterantiva_c_txt": "html da c",
+        "alterantiva_d_txt": "html da d",
+        "alterantiva_e_txt": "html da e"
+      },
+      "alternativa_correta": "pode deixar vazio aqui"
+    }
+  ]
+}
