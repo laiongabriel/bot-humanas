@@ -1,13 +1,13 @@
 {
   "questoes": [
     {
-      "enunciado_txt": "html do enunciado vai aqui.",
+      "enunciado_txt": "html do enunciado vai aqui. todos os <p> que fazem parte do enunciado da questao aqui dentro, um atras do outro grudado mesmo, retirando as alternativas. aqui podem ter outras coisas tambem, como tag img, que as vezes tem dentro dos p.",
       "alternativas": {
-        "alterantiva_a_txt": "html da a",
-        "alterantiva_b_txt": "html da b",
-        "alterantiva_c_txt": "html da c",
-        "alterantiva_d_txt": "html da d",
-        "alterantiva_e_txt": "html da e"
+        "alterantiva_a_txt": "aqui vai o html da alternativa. simplesmente o <p> da alternativa aqui.",
+        "alterantiva_b_txt": "",
+        "alterantiva_c_txt": "",
+        "alterantiva_d_txt": "",
+        "alterantiva_e_txt": ""
       },
       "alternativa_correta": "pode deixar vazio aqui"
     }

@@ -4,9 +4,7 @@ import numpy as np
 import os
 import base64
 import re
-import json
 from collections import Counter
-from bs4 import BeautifulSoup
 
 # -------------------------------------------------------------------
 # Lista de trechos indesejados (considerando variações comuns)
@@ -49,9 +47,6 @@ def trecho_indesejado(texto):
             return True
     return False
 
-# -------------------------------------------------------------------
-# Função auxiliar: calcula a razão de sobreposição entre dois bboxes.
-# -------------------------------------------------------------------
 def get_overlap_ratio(bbox_text, bbox_img):
     x0 = max(bbox_text[0], bbox_img[0])
     y0 = max(bbox_text[1], bbox_img[1])
@@ -63,9 +58,6 @@ def get_overlap_ratio(bbox_text, bbox_img):
     text_area = (bbox_text[2] - bbox_text[0]) * (bbox_text[3] - bbox_text[1])
     return inter_area / text_area if text_area > 0 else 0
 
-# -------------------------------------------------------------------
-# Função auxiliar: detecta se existe uma linha vertical na imagem
-# -------------------------------------------------------------------
 def detect_vertical_line(image_path, min_line_length_ratio=0.8, angle_threshold=10, margin_ratio=0.1):
     image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
     if image is None:
@@ -100,18 +92,12 @@ def is_completely_inside(inner_bbox, outer_bbox):
             inner_bbox[2] <= outer_bbox[2] and
             inner_bbox[3] <= outer_bbox[3])
 
-# -------------------------------------------------------------------
-# Função auxiliar: converte uma imagem para base64
-# -------------------------------------------------------------------
 def image_to_base64_data(img_path):
     with open(img_path, "rb") as f:
         data = f.read()
     encoded = base64.b64encode(data).decode("utf-8")
     return f"data:image/png;base64,{encoded}"
 
-# -------------------------------------------------------------------
-# Função auxiliar: formata um texto de acordo com a fonte
-# -------------------------------------------------------------------
 def format_text(span):
     text = span.get("text", "").strip()
     if not text:
@@ -124,9 +110,6 @@ def format_text(span):
     else:
         return text
 
-# -------------------------------------------------------------------
-# 1. Extrai as páginas do PDF como imagens
-# -------------------------------------------------------------------
 def extract_pages_as_images(pdf_path, output_dir="output_images", scale_factor=3):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -145,9 +128,6 @@ def extract_pages_as_images(pdf_path, output_dir="output_images", scale_factor=3
     doc.close()
     return image_paths
 
-# -------------------------------------------------------------------
-# 2. Processa e recorta as imagens que possuem borda roxa
-# -------------------------------------------------------------------
 def process_and_cut_images(input_images, output_dir="cut-imgs", scale_factor=3):
     import os, cv2, numpy as np
     cropped_images = {}
@@ -195,9 +175,49 @@ def process_and_cut_images(input_images, output_dir="cut-imgs", scale_factor=3):
     print(f"Imagens recortadas salvas em '{output_dir}'.")
     return cropped_images
 
-# -------------------------------------------------------------------
-# 3. Extrai o texto do PDF e insere tags <img> para os blocos de imagem
-# -------------------------------------------------------------------
+def extract_alternative_letter(text):
+    """
+    Extrai a letra da alternativa do início do texto.
+    Retorna (letra, texto_sem_letra) ou (None, texto_original)
+    """
+    # Remove tags HTML para análise
+    clean_text = text.strip()
+    
+    # Procura por padrão: letra seguida de ponto, parêntese ou espaço no início
+    # Aceita também tags HTML antes da letra
+    patterns = [
+        r'^<[^>]+>([A-E])[.\)\s]+',  # Com tag HTML antes
+        r'^([A-E])[.\)\s]+',  # Sem tag HTML
+    ]
+    
+    for pattern in patterns:
+        match = re.match(pattern, clean_text)
+        if match:
+            letra = match.group(1).lower()
+            # Remove a letra e qualquer pontuação/espaço após ela
+            texto_limpo = clean_text[match.end():].strip()
+            return letra, texto_limpo
+    
+    # Se não encontrou padrão, tenta buscar letra isolada no início
+    match = re.match(r'^(<[^>]+>)?([A-E])(<[^>]+>)?\s+', clean_text)
+    if match:
+        letra = match.group(2).lower()
+        texto_limpo = clean_text[match.end():].strip()
+        return letra, texto_limpo
+    
+    return None, text
+
+def is_question_number(text):
+    """
+    Verifica se o texto é um número de questão (ex: "QUESTÃO 1", "01", etc.)
+    """
+    # Remove formatação HTML para análise
+    clean_text = re.sub(r'<[^>]+>', '', text).strip()
+    # Verifica se é "QUESTÃO X" ou apenas número
+    if re.match(r'^(QUESTÃO\s+)?\d{1,3}$', clean_text, re.IGNORECASE):
+        return True
+    return False
+
 def pdf_to_txt_with_img_tags(pdf_path, txt_path, cropped_images_mapping, overlap_threshold=0.3, scale_factor=3):
     import os, re
     from collections import Counter
@@ -205,6 +225,7 @@ def pdf_to_txt_with_img_tags(pdf_path, txt_path, cropped_images_mapping, overlap
 
     doc = fitz.open(pdf_path)
 
+    # Determina o tamanho de fonte mais recorrente
     most_common_size = None
     sample_page_index = 3
     if len(doc) > sample_page_index:
@@ -226,8 +247,9 @@ def pdf_to_txt_with_img_tags(pdf_path, txt_path, cropped_images_mapping, overlap
         if sizes:
             most_common_size = Counter(sizes).most_common(1)[0][0]
 
-    output_lines = []
+    all_items = []  # Lista global de todos os itens de todas as páginas
 
+    # Processa cada página
     for page_num in range(1, len(doc) - 1):
         page = doc.load_page(page_num)
         base_name = f"page_{page_num + 1}"
@@ -243,6 +265,7 @@ def pdf_to_txt_with_img_tags(pdf_path, txt_path, cropped_images_mapping, overlap
         blocks = page.get_text("dict")["blocks"]
         items = []
 
+        # Processa blocos de texto
         for block in blocks:
             if block["type"] == 0:
                 for line in block["lines"]:
@@ -287,18 +310,27 @@ def pdf_to_txt_with_img_tags(pdf_path, txt_path, cropped_images_mapping, overlap
                         first_span_bbox = line["spans"][0].get("bbox", [0, 0, 0, 0])
                         y_val = first_span_bbox[1]
                         x_val = first_span_bbox[0]
+                        
+                        # Processa alternativas
                         if alternativa_found:
-                            content = f'<p class="alternativa">{line_text.strip()}</p>'
+                            letra, texto_limpo = extract_alternative_letter(line_text.strip())
+                            if letra:
+                                content = f'<p class="alternativa_{letra}">{texto_limpo}</p>'
+                            else:
+                                content = f'<p class="alternativa">{line_text.strip()}</p>'
                         else:
                             content = f'<p>{line_text.strip()}</p>'
+                        
                         items.append({
                             "y": y_val,
                             "x": x_val,
                             "column": column,
                             "type": "text",
-                            "content": content
+                            "content": content,
+                            "is_alternative": alternativa_found
                         })
 
+        # Insere imagens
         if base_name in cropped_images_mapping:
             for entry in cropped_images_mapping[base_name]:
                 if len(entry) == 3:
@@ -317,24 +349,39 @@ def pdf_to_txt_with_img_tags(pdf_path, txt_path, cropped_images_mapping, overlap
                     "x": bbox[0],
                     "column": column,
                     "type": "img",
-                    "content": (img_path, bbox)
+                    "content": (img_path, bbox),
+                    "is_alternative": False
                 })
 
+        # Ordena itens
         if vertical_line_pdf is not None:
             items.sort(key=lambda i: (i["column"], i["y"], i["x"]))
         else:
             items.sort(key=lambda i: (i["y"], i["x"]))
 
+        # Mescla textos próximos
         merged_items = []
         if items:
             current_item = items[0]
             for item in items[1:]:
                 if (current_item["type"] == "text" and item["type"] == "text" and
                     current_item["column"] == item["column"] and
-                    abs(item["y"] - current_item["y"]) < 5):
+                    abs(item["y"] - current_item["y"]) < 5 and
+                    current_item["is_alternative"] == item["is_alternative"]):
                     current_content = current_item["content"].replace("<p>", "").replace("</p>", "")
+                    # Preserva classes de alternativa
+                    current_content = re.sub(r'<p class="[^"]*">', '', current_content).replace("</p>", "")
                     item_content = item["content"].replace("<p>", "").replace("</p>", "")
-                    current_item["content"] = f"<p>{current_content} {item_content}</p>"
+                    item_content = re.sub(r'<p class="[^"]*">', '', item_content).replace("</p>", "")
+                    
+                    # Reconstrói com a classe apropriada
+                    if current_item["is_alternative"]:
+                        # Extrai a classe da alternativa
+                        match = re.search(r'class="(alternativa[^"]*)"', current_item["content"])
+                        classe = match.group(1) if match else "alternativa"
+                        current_item["content"] = f'<p class="{classe}">{current_content} {item_content}</p>'
+                    else:
+                        current_item["content"] = f"<p>{current_content} {item_content}</p>"
                 else:
                     merged_items.append(current_item)
                     current_item = item
@@ -342,137 +389,57 @@ def pdf_to_txt_with_img_tags(pdf_path, txt_path, cropped_images_mapping, overlap
         else:
             merged_items = items
 
-        page_output = []
-        for item in merged_items:
+        all_items.extend(merged_items)
+
+    # Agrupa itens em questões (articles)
+    output_lines = []
+    current_article = []
+    in_question = False
+
+    for item in all_items:
+        if item["type"] == "text":
+            content_text = re.sub(r'<[^>]+>', '', item["content"]).strip()
+            
+            # Detecta início de nova questão
+            if is_question_number(content_text):
+                # Fecha article anterior se existir
+                if current_article:
+                    output_lines.append("<article>")
+                    output_lines.extend(current_article)
+                    output_lines.append("</article>\n")
+                    current_article = []
+                in_question = True
+            
+            # Adiciona conteúdo ao article atual
             if item["type"] == "text":
-                page_output.append(item["content"])
-            elif item["type"] == "img":
-                img_path, bbox = item["content"]
-                img_data_uri = image_to_base64_data(img_path)
-                pdf_width = bbox[2] - bbox[0]
-                pdf_height = bbox[3] - bbox[1]
-                page_output.append(
-                    f'<p><img src="{img_data_uri}" alt="Elemento com borda roxa" '
-                    f'style="width:{pdf_width}pt; height:{pdf_height}pt; display:block;" /></p>'
-                )
-        output_lines.extend(page_output)
-        output_lines.append("\n")
+                current_article.append(item["content"])
+            
+        elif item["type"] == "img":
+            img_path, bbox = item["content"]
+            img_data_uri = image_to_base64_data(img_path)
+            pdf_width = bbox[2] - bbox[0]
+            pdf_height = bbox[3] - bbox[1]
+            img_tag = (f'<p><img src="{img_data_uri}" alt="Elemento com borda roxa" '
+                      f'style="width:{pdf_width}pt; height:{pdf_height}pt; display:block;" /></p>')
+            current_article.append(img_tag)
+
+    # Fecha o último article
+    if current_article:
+        output_lines.append("<article>")
+        output_lines.extend(current_article)
+        output_lines.append("</article>\n")
 
     html_output = "<html><head><meta charset='utf-8'></head><body>" + "\n".join(output_lines) + "</body></html>"
     with open(txt_path, "w", encoding="utf-8") as f:
         f.write(html_output)
     print("HTML com tags de imagem e formatação salvo em:", txt_path)
 
-# -------------------------------------------------------------------
-# 4. Converte o HTML para JSON estruturado
-# -------------------------------------------------------------------
-def html_to_questoes_json(html_path, json_output_path):
-    """
-    Converte o HTML gerado com questões do ENEM para o formato JSON estruturado.
-    
-    Args:
-        html_path: Caminho do arquivo HTML de entrada
-        json_output_path: Caminho do arquivo JSON de saída
-    """
-    with open(html_path, 'r', encoding='utf-8') as f:
-        html_content = f.read()
-    
-    soup = BeautifulSoup(html_content, 'html.parser')
-    paragrafos = soup.find_all('p')
-    
-    print(f"Total de parágrafos encontrados: {len(paragrafos)}")
-    
-    # Debug: mostra os primeiros 5 parágrafos
-    print("\nPrimeiros 5 parágrafos:")
-    for i, p in enumerate(paragrafos[:5]):
-        print(f"{i}: {str(p)[:200]}")
-    
-    questoes = []
-    questao_atual = None
-    enunciado_parts = []
-    alternativas_encontradas = {}
-    
-    questao_pattern = re.compile(r'^<strong>\s*(\d+)\s*</strong>')
-    alternativa_pattern = re.compile(r'^\s*([A-E])\s+', re.IGNORECASE)
-    
-    for p in paragrafos:
-        p_html = str(p)
-        p_text = p.get_text().strip()
-        
-        match_questao = questao_pattern.search(p_html)
-        
-        if match_questao:
-            if questao_atual is not None:
-                questao_atual['enunciado_txt'] = ''.join(enunciado_parts).strip()
-                questao_atual['alternativas'] = alternativas_encontradas.copy()
-                questoes.append(questao_atual)
-            
-            numero_questao = match_questao.group(1)
-            questao_atual = {
-                'numero': int(numero_questao),
-                'enunciado_txt': '',
-                'alternativas': {},
-                'alternativa_correta': ''
-            }
-            enunciado_parts = []
-            alternativas_encontradas = {}
-            
-            p_html_sem_numero = questao_pattern.sub('', p_html)
-            if p_html_sem_numero.strip() not in ['<p></p>', '<p> </p>']:
-                enunciado_parts.append(p_html_sem_numero)
-        
-        elif 'class="alternativa"' in p_html and questao_atual is not None:
-            conteudo_alternativa = p_html.replace('<p class="alternativa">', '').replace('</p>', '').strip()
-            
-            match_letra = alternativa_pattern.match(p_text)
-            
-            if match_letra:
-                letra = match_letra.group(1).upper()
-                conteudo_sem_letra = alternativa_pattern.sub('', conteudo_alternativa).strip()
-                
-                chave = f'alternativa_{letra.lower()}_txt'
-                alternativas_encontradas[chave] = conteudo_sem_letra
-        
-        elif questao_atual is not None and not alternativas_encontradas:
-            if p_html.strip() not in ['<p></p>', '<p> </p>']:
-                enunciado_parts.append(p_html)
-    
-    if questao_atual is not None:
-        questao_atual['enunciado_txt'] = ''.join(enunciado_parts).strip()
-        questao_atual['alternativas'] = alternativas_encontradas.copy()
-        questoes.append(questao_atual)
-    
-    for q in questoes:
-        if 'numero' in q:
-            del q['numero']
-    
-    resultado = {
-        'questoes': questoes
-    }
-    
-    with open(json_output_path, 'w', encoding='utf-8') as f:
-        json.dump(resultado, f, ensure_ascii=False, indent=2)
-    
-    print(f"JSON gerado com {len(questoes)} questões em: {json_output_path}")
-    return resultado
 
-# -------------------------------------------------------------------
-# Execução principal
-# -------------------------------------------------------------------
-if __name__ == "__main__":
-    pdf_path = "provas/dia1_caderno1_azul.pdf"
-    txt_path = "prova_enem.txt"
-    json_path = "questoes_enem.json"
-    scale_factor = 3
+# Exemplo de uso
+pdf_path = "provas/dia1_caderno1_azul.pdf"
+txt_path = "prova_enem.txt"
+scale_factor = 3
 
-    # 1. Extrai as páginas do PDF como imagens
-    input_images = extract_pages_as_images(pdf_path, output_dir="output_images", scale_factor=scale_factor)
-    
-    # 2. Processa e recorta as imagens com borda roxa
-    cropped_images_mapping = process_and_cut_images(input_images, output_dir="cut-imgs", scale_factor=scale_factor)
-    
-    # 3. Extrai o texto do PDF e gera HTML
-    pdf_to_txt_with_img_tags(pdf_path, txt_path, cropped_images_mapping, overlap_threshold=0.5, scale_factor=scale_factor)
-    
-    # 4. Converte o HTML para JSON estruturado
-    html_to_questoes_json(txt_path, json_path)
+input_images = extract_pages_as_images(pdf_path, output_dir="output_images", scale_factor=scale_factor)
+cropped_images_mapping = process_and_cut_images(input_images, output_dir="cut-imgs", scale_factor=scale_factor)
+pdf_to_txt_with_img_tags(pdf_path, txt_path, cropped_images_mapping, overlap_threshold=0.5, scale_factor=scale_factor)
